@@ -363,6 +363,7 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                 $first_margin = $iteration;
                 $dateDebut = date('Y-m-d', strtotime($date . ' + 2 day'));
 
+                // Sélection aléatoire d'un lieu disponible
                 // Sélection aléatoire des enseignants disponibles
                 $enseignants = getEns($conn, rand(3, 4), $mainTeacher, $feedback); // Sélectionne aléatoirement entre 4 et 5 enseignants
 
@@ -382,7 +383,7 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                     }
                 }
                 $enseignants = $enseignantsDisponibles;
-                // Sélection aléatoire d'un lieu disponible
+                
                 // Récupérer les groupes pour cette spécialité
                 $groupes = getGroupesForSpecialite($conn, $specialite);
 
@@ -448,9 +449,68 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                     }
                 }
                 unset($groupe); // Libérer la référence
+                // Fetch the necessary data (you would already have this part)
+// // Fetch the necessary data (you would already have this part)
+// $lieu_surveillants = array();
+// $enseignantstotal = getEns($conn, 4 * count($lieux_non_dispos_locaux), $mainTeacher, $feedback);
 
-                
+//     $enseignantstotal[] = $mainTeacher;
 
+// // Shuffle the list of teachers to ensure random distribution
+// shuffle($enseignantstotal);
+
+// // Remove the main teacher from the list
+// if (($key = array_search($mainTeacher, $enseignantstotal)) !== false) {
+//     unset($enseignantstotal[$key]);
+// }
+
+// // Calculate the number of surveillants required per "lieu"
+// $minSurveillantsPerLieu = 4;
+// $totalLieux = count($lieux_non_dispos_locaux);
+// $totalSurveillants = count($enseignantstotal);
+
+// // Assign main teacher to the first "lieu"
+// $firstLieu = array_shift($lieux_non_dispos_locaux);
+// $lieu_surveillants[$firstLieu] = array($mainTeacher);
+
+// // Distribute surveillants to each "lieu"
+// $index = 0;
+// foreach ($lieux_non_dispos_locaux as $lieu) {
+//     $lieu_surveillants[$lieu] = array();
+
+//     // Ensure each lieu gets the minimum required surveillants
+//     for ($i = 0; $i < $minSurveillantsPerLieu; $i++) {
+//         if (isset($enseignantstotal[$index])) {
+//             $lieu_surveillants[$lieu][] = $enseignantstotal[$index];
+//             $index++;
+//         }
+//     }
+// }
+
+// // Distribute remaining surveillants evenly if there are any left
+// while ($index < $totalSurveillants) {
+//     foreach ($lieux_non_dispos_locaux as $lieu) {
+//         if ($index < $totalSurveillants) {
+//             $lieu_surveillants[$lieu][] = $enseignantstotal[$index];
+//             $index++;
+//         }
+//     }
+// }
+
+// // Add remaining surveillants to the first lieu if there are any left
+// while ($index < $totalSurveillants) {
+//     $lieu_surveillants[$firstLieu][] = $enseignantstotal[$index];
+//     $index++;
+// }
+
+// // Example usage of $lieu_surveillants
+// foreach ($lieu_surveillants as $lieu => $surveillants) {
+//     echo "Lieu: " . $lieu . "<br>Surveillants: ";
+//     foreach ($surveillants as $surveillant) {
+//         echo $surveillant . " ";
+//     }
+//     echo "<br>";
+// }
 
 
 
@@ -577,8 +637,12 @@ function selectAvailableLocations($conn, $date, $heureDebut, $heureFin)
 
     return $locations;
 }
-
-
+if ($_SERVER["REQUEST_METHOD"] == "GET") {
+    if (isset($_GET['error_message'])){
+        $error_message = $_GET['error_message'];
+        echo "<script>alert('$error_message');</script>";
+    }
+}
 
 // Traitement du formulaire si soumis
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
@@ -593,6 +657,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $dateDebut = json_decode($_POST['dateDebut'], true);
             $dateFin = json_decode($_POST['dateFin'], true);
             $specialite = json_decode($_POST['specialitee'], true);
+            $dateDebut = date('Y-m-d', strtotime($dateDebut));
+            $dateFin = date('Y-m-d', strtotime($dateFin));
             // echo json_encode($planningFiltre);
         
             foreach ($planningFiltre as $examen) {
@@ -610,13 +676,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
                 try {
                     // Insert data into the Examen table
-                    $sql = "INSERT INTO Examen (date, heureDebut, heureFin, id_module) VALUES (?, ?, ?, ?)";
+                    $sql = "INSERT INTO Examen (date, heureDebut, heureFin, id_module, periodeDebut, periodeFin) VALUES (?, ?, ?, ?, ?, ?)";
                     $stmt = $conn->prepare($sql);
                     if (!$stmt) {
                         throw new Exception("Erreur de préparation de la requête : " . $conn->error);
                     }
                     echo $examen['id_module'];
-                    $stmt->bind_param("sssi", $examen['date'], $heureDebut, $heureFin, $examen['id_module']); //, $lieu_numero
+                    $stmt->bind_param("sssiss", $examen['date'], $heureDebut, $heureFin, $examen['id_module'], $dateDebut, $dateFin); //, $lieu_numero
                     $stmt->execute();
                     if ($stmt->errno) {
                         throw new Exception("Erreur d'insertion dans la base de données: " . $stmt->error);
@@ -714,6 +780,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // Récupération de la période de planification des examens
     $periode = $_POST["periode"];
     list($dateDebut, $dateFin) = explode(" à ", $periode);
+    //Check if any exams are planned for this specialite during this period
+    $sql = "SELECT COUNT(*) AS count FROM Examen WHERE periodeDebut = ? AND periodeFin = ? AND id_module IN (SELECT id_module FROM module WHERE nom_specialite = ?)";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("sss", $dateDebut, $dateFin, $specialite);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $count = $result->fetch_assoc()['count'];
+    if ($count > 0){
+        $error_message= "Des examens sont déjà planifiés pour cette spécialité pendant cette période. Veuillez choisir une autre période.";
+        header("Location: planning.php?error_message=$error_message");
+    }
 
 
 
@@ -983,11 +1060,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                 <?php
                                 // Connexion à la base de données
                                 $pdo = new PDO('mysql:host=localhost;dbname=myproject', 'root', '');
-                                $stmt = $pdo->query('SELECT nom_specialite FROM specialite WHERE nom_specialite NOT IN (
-                                    SELECT nom_specialite from module where id_module IN (
-                                        SELECT id_module from examen
-                                    )
-                                )');
+                                $stmt = $pdo->query('SELECT nom_specialite FROM specialite');
                                 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
                                     echo "<option value='" . $row['nom_specialite'] . "'>" . $row['nom_specialite'] . "</option>";
                                 }

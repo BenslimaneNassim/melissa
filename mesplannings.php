@@ -94,10 +94,26 @@ function getModuleById($conn, $id_module) {
     return $result->fetch_assoc();
 }
 
-function getExamsBySpecialite($conn, $specialite){
-    $sql = "SELECT * FROM examen WHERE id_module IN (
+// function getExamsBySpecialite($conn, $specialite){
+//     $sql = "SELECT * FROM examen WHERE id_module IN (
+//                 SELECT id_module FROM module WHERE nom_specialite = ?
+//             ) ORDER BY date, heureDebut";
+
+//     $stmt = $conn->prepare($sql);
+//     $stmt->bind_param("s", $specialite);
+//     $stmt->execute();
+//     $result = $stmt->get_result();
+//     $exams = [];
+//     while ($row = $result->fetch_assoc()) {
+//         $exams[] = $row;
+//     }
+//     return $exams;
+// }
+function getExamsBySpecialite($conn, $specialite) {
+    $sql = "SELECT * FROM examen 
+            WHERE id_module IN (
                 SELECT id_module FROM module WHERE nom_specialite = ?
-            ) ORDER BY date, heureDebut";
+            ) ORDER BY periodeDebut, periodeFin, date, heureDebut";
 
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("s", $specialite);
@@ -105,10 +121,15 @@ function getExamsBySpecialite($conn, $specialite){
     $result = $stmt->get_result();
     $exams = [];
     while ($row = $result->fetch_assoc()) {
-        $exams[] = $row;
+        $periodeKey = $row['periodeDebut'] . ' - ' . $row['periodeFin'];
+        if (!isset($exams[$periodeKey])) {
+            $exams[$periodeKey] = [];
+        }
+        $exams[$periodeKey][] = $row;
     }
     return $exams;
 }
+
 
 function getSurveillants($conn, $exam_id) {
     $sql = "SELECT * FROM surveillant WHERE id_examen = ?";
@@ -294,71 +315,64 @@ $specialites = getSpecialites($conn);
                 <!-- <h1>Plannings d'examen</h1> -->
 
                 <?php foreach ($specialites as $specialite): ?>
-                    <!-- <h2>Planning pour Specialite:</h2> -->
-                    <div style="">
-                        <div class="table-data" style="width:80%; margin: auto; margin-top:20px">
-                            <div class="order">
-                                <div class="head">
-                                    <!-- <h3>Planning</h3> -->
-                                    <i class='bx bx-filter'></i>
-                                </div>
-
-                                <!-- Affichage du planning d'examens généré -->
-                                <div style="float:right">
-                                        <button onclick="deletePlanning('<?php echo $specialite ?>')" class='btn-delete'><i class='bx bx-trash'></i> Supprimer</button>
-                                    </div>
-
-                                <h2>Planning pour la spécialité <?php echo $specialite; ?></h2>
-                                
-                                <br>
-                                <table id="tableauPlanning">
-                                    <tr>
-                                        <th>Date et Heure</th>
-                                        <th>Module</th>
-                                        <!-- <th>Sections et Groupes</th> -->
-                                        <th>Lieu</th>
-                                        <!-- <th>Lieu</th> -->
-                                        <th>Surveillants</th>
-                                    </tr>
-                                    <?php 
-                                    $exams = getExamsBySpecialite($conn, $specialite);
-                                    foreach ($exams as $exam):
-                                        $module = getModuleById($conn, $exam['id_module']);
-                                        $lieux_with_groups = getLieuxwithGroupsbyExam($conn, $exam['id']); // Fetch Lieux with associated Groups for the exam
-                                    ?>
-                                        <tr>
-                                            <td><?php echo $exam['date']; ?> <br> <?php echo " de " . $exam['heureDebut']; ?> <br>
-                                                <?php echo " à " . $exam['heureFin']; ?> </td>
-                                            <td><?php echo $module['nom_module']; ?></td>
-                                            <td>
-                                                <?php foreach ($lieux_with_groups as $lieu_name => $lieu_data): ?>
-                                                    <strong><?php echo $lieu_name; ?>:</strong>
-                                                    <?php foreach ($lieu_data['groups'] as $group): ?>
-                                                        <?php echo $group['nom_groupe'] . " "; ?>
-                                                    <?php endforeach; ?>
-                                                    <br>
-                                                <?php endforeach; ?>
-                                            </td>
-
-                                            <!-- les surveillants -->
-                                            <td>
-                                                <?php $surveillants = getSurveillants($conn, $exam['id']); ?>
-                                                <?php foreach ($surveillants as $surveillant): ?>
-                                                    <?php
-                                                        if ($module['charge_module'] == $surveillant['nom_enseignant']) {
-                                                            echo "<strong>" . $surveillant['nom_enseignant'] . "</strong>  ";
-                                                        } else {
-                                                            echo $surveillant['nom_enseignant'] . "  ";} echo "<br>"; ?>
-                                                <?php endforeach; ?>
-                                            </td>
-                                        </tr>
+    <?php
+    $examsByPeriod = getExamsBySpecialite($conn, $specialite);
+    foreach ($examsByPeriod as $periode => $exams):
+    ?>
+        <div style="">
+            <div class="table-data" style="width:80%; margin: auto; margin-top:20px">
+                <div class="order">
+                    <div class="head">
+                        <i class='bx bx-filter'></i>
+                    </div>
+                    <div style="float:right">
+                        <button onclick="deletePlanning('<?php echo $specialite ?>')" class='btn-delete'><i class='bx bx-trash'></i> Supprimer</button>
+                    </div>
+                    <h2>Planning pour la spécialité <?php echo $specialite; ?> - Période: <?php echo $periode; ?></h2>
+                    <br>
+                    <table id="tableauPlanning">
+                        <tr>
+                            <th>Date et Heure</th>
+                            <th>Module</th>
+                            <th>Lieu</th>
+                            <th>Surveillants</th>
+                        </tr>
+                        <?php foreach ($exams as $exam):
+                            $module = getModuleById($conn, $exam['id_module']);
+                            $lieux_with_groups = getLieuxwithGroupsbyExam($conn, $exam['id']); // Fetch Lieux with associated Groups for the exam
+                        ?>
+                            <tr>
+                                <td><?php echo $exam['date']; ?> <br> <?php echo " de " . $exam['heureDebut']; ?> <br>
+                                    <?php echo " à " . $exam['heureFin']; ?> </td>
+                                <td><?php echo $module['nom_module']; ?></td>
+                                <td>
+                                    <?php foreach ($lieux_with_groups as $lieu_name => $lieu_data): ?>
+                                        <strong><?php echo $lieu_name; ?>:</strong>
+                                        <?php foreach ($lieu_data['groups'] as $group): ?>
+                                            <?php echo $group['nom_groupe'] . " "; ?>
+                                        <?php endforeach; ?>
+                                        <br>
                                     <?php endforeach; ?>
-                                </table>
-                            </div>
-                        </div>
-
-                    </div>        
-                <?php endforeach; ?>
+                                </td>
+                                <td>
+                                    <?php $surveillants = getSurveillants($conn, $exam['id']); ?>
+                                    <?php foreach ($surveillants as $surveillant): ?>
+                                        <?php
+                                            if ($module['charge_module'] == $surveillant['nom_enseignant']) {
+                                                echo "<strong>" . $surveillant['nom_enseignant'] . "</strong>  ";
+                                            } else {
+                                                echo $surveillant['nom_enseignant'] . "  ";} echo "<br>"; ?>
+                                    <?php endforeach; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </table>
+                </div>
+            </div>
+        </div>
+    <?php endforeach; ?>
+<?php endforeach; ?>
+                
 
             </section>
 
