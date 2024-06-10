@@ -132,7 +132,7 @@ function getExamsBySpecialite($conn, $specialite) {
 
 
 function getSurveillants($conn, $exam_id) {
-    $sql = "SELECT * FROM surveillant WHERE id_examen = ?";
+    $sql = "SELECT s.id_examen as id_examen, s.nom_enseignant as nom_enseignant, ld.lieu_numero as lieu_numero  FROM surveillant s, lieu_disponibilite ld WHERE id_examen = ? AND ld.id = s.id_lieu_dispo ORDER BY s.nom_enseignant";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("i", $exam_id);
     $stmt->execute();
@@ -331,12 +331,16 @@ $specialites = getSpecialites($conn);
                     <h2>Planning pour la spécialité <?php echo $specialite; ?> - Période: <?php echo $periode; ?></h2>
                     <br>
                     <table id="tableauPlanning">
-                        <tr>
-                            <th>Date et Heure</th>
-                            <th>Module</th>
-                            <th>Lieu</th>
-                            <th>Surveillants</th>
-                        </tr>
+                        <thead>
+                            <tr>
+                                <th>Date et Heure</th>
+                                <th>Module</th>
+                                <th>Lieu</th>
+                                <th>Surveillants</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+
                         <?php foreach ($exams as $exam):
                             $module = getModuleById($conn, $exam['id_module']);
                             $lieux_with_groups = getLieuxwithGroupsbyExam($conn, $exam['id']); // Fetch Lieux with associated Groups for the exam
@@ -346,7 +350,10 @@ $specialites = getSpecialites($conn);
                                     <?php echo " à " . $exam['heureFin']; ?> </td>
                                 <td><?php echo $module['nom_module']; ?></td>
                                 <td>
+                                    <?php     $firstLieu = true; ?>
                                     <?php foreach ($lieux_with_groups as $lieu_name => $lieu_data): ?>
+                                        <!-- <?php //if (!$firstLieu) echo "<hr>"; ?> -->
+                                        <?php $firstLieu = false; ?>
                                         <strong><?php echo $lieu_name; ?>:</strong>
                                         <?php foreach ($lieu_data['groups'] as $group): ?>
                                             <?php echo $group['nom_groupe'] . " "; ?>
@@ -356,16 +363,33 @@ $specialites = getSpecialites($conn);
                                 </td>
                                 <td>
                                     <?php $surveillants = getSurveillants($conn, $exam['id']); ?>
-                                    <?php foreach ($surveillants as $surveillant): ?>
-                                        <?php
-                                            if ($module['charge_module'] == $surveillant['nom_enseignant']) {
-                                                echo "<strong>" . $surveillant['nom_enseignant'] . "</strong>  ";
-                                            } else {
-                                                echo $surveillant['nom_enseignant'] . "  ";} echo "<br>"; ?>
+                                    <?php     $firstLieu = true; ?>
+                                    <?php foreach ($lieux_with_groups as $lieu_name => $lieu_data): ?>
+                                        <?php if (!$firstLieu) echo "<hr>"; ?>
+                                        <!-- <strong><?php //echo $lieu_name; ?>:</strong> -->
+                                        <?php $firstLieu = false; ?>
+                                        <?php $firstSurveillant = true; ?>
+                                        <?php foreach ($surveillants as $surveillant): ?>
+                                            <?php
+                                                if($surveillant['lieu_numero'] == $lieu_name){
+                                                    if (!$firstSurveillant) echo ", ";
+                                                    $firstSurveillant = false;
+
+                                                    if ($module['charge_module'] == $surveillant['nom_enseignant']) {
+                                                        echo "<strong>" . $surveillant['nom_enseignant'] . "</strong>";
+                                                    } else {
+                                                        echo $surveillant['nom_enseignant'];
+                                                    }
+                                                }
+                                            ?>
+                                        <?php endforeach; ?>
+                                        <br>
                                     <?php endforeach; ?>
+
                                 </td>
                             </tr>
                         <?php endforeach; ?>
+                        </tbody>
                     </table>
                 </div>
             </div>

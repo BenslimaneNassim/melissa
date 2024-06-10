@@ -12,16 +12,27 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-function getEns($conn, $count = 4, $mainTeacher, $feedback)
+function getEns($conn, $count = 4, $mainTeacher, $feedback, $date, $heureDebut, $heureFin)
 {
     $teachers = array();
     if ($feedback == 0){
-        $sql = "SELECT nom FROM enseignant WHERE nom != ? AND grade != 'Doct' AND grade != 'Pr' ORDER BY RAND() LIMIT ?";
+
+        $sql = "SELECT nom FROM enseignant WHERE nom != ? AND grade != 'Doct' AND grade != 'Pr' AND nom NOT IN(
+            SELECT nom_enseignant FROM enseignant_disponibilite 
+            WHERE jour = ? AND 
+            ((heureDebut <= ? AND heureFin >= ?) OR (heureDebut <= ? AND heureFin >= ?))
+
+        ) ORDER BY RAND() LIMIT ?";
     }else{
-        $sql = "SELECT nom FROM enseignant WHERE nom != ? ORDER BY RAND() LIMIT ?";
+        $sql = "SELECT nom FROM enseignant WHERE nom != ? AND nom NOT IN (
+            SELECT nom_enseignant FROM enseignant_disponibilite 
+            WHERE jour = ? AND 
+            ((heureDebut <= ? AND heureFin >= ?) OR (heureDebut <= ? AND heureFin >= ?))
+
+        ) ORDER BY RAND() LIMIT ?";
     }
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("si", $mainTeacher, $count);
+    $stmt->bind_param("ssssssi", $mainTeacher, $date, $heureDebut, $heureDebut, $heureFin, $heureFin, $count);
     $stmt->execute();
     $result = $stmt->get_result();
 
@@ -283,7 +294,6 @@ function findFirstExamDateLaxity($no_days, $no_exams){
 function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedback)
 {
     $planning = array();
-    echo $specialite;
     // Préparer la requête pour sélectionner les modules affectés à la spécialité spécifique
     $sql = "SELECT id_module, nom_module, activite, nom_specialite, charge_module FROM module WHERE nom_specialite = ? ORDER BY RAND()";
     $stmt = $conn->prepare($sql);
@@ -299,18 +309,14 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
     $useMorningSlot = (bool)rand(0, 1);
     // Commence le matin ou aprés midi
 
-    echo ' HI';
-    echo $result->num_rows;
     // Générer aléatoirement un planning pour chaque module dans la période spécifiée
     if ($result->num_rows > 0) {
 
         $numRows = $result->num_rows;
         $working_days = getWorkingDays($dateDebut, $dateFin);
         if ($numRows > $working_days){
-            echo $working_days;
             $error_message = "test";
-            echo $error_message;
-            return $error_message;
+            return false;
         }else{
 
             $first_margin = findFirstExamDateLaxity($working_days, $numRows);
@@ -335,14 +341,11 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                     } else{
                         $margin = $first_margin-$iteration;
                     }
-                    // $date = date('Y-m-d', strtotime($dateDebut)+$first_margin-$iteration);
                     $date = date('Y-m-d', strtotime("+$margin days", strtotime($dateDebut)));
-                    // $date = date('Y-m-d', strtotime("-$iteration days", strtotime($date)));
 
                     if ($iteration > 0) {
                         $iteration--;
                     }
-                    // echo $date;
                     $dayOfWeek = date('N', strtotime($date)); // 1 (for Monday) through 7 (for Sunday)
                     if($dayOfWeek == 5){
                         $date = date('Y-m-d', strtotime($date . ' + 2 day'));
@@ -352,7 +355,6 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                     // Checker si l'algorithme est bloqué ici pour recommencer la regéneration
                     // $end = microtime(true);
                     // $executionTime = $end - $startmicrotime;
-                    echo $check_if_stuck;
                     if ($check_if_stuck >10){
                         return false;
                     }
@@ -364,25 +366,6 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                 $dateDebut = date('Y-m-d', strtotime($date . ' + 2 day'));
 
                 // Sélection aléatoire d'un lieu disponible
-                // Sélection aléatoire des enseignants disponibles
-                $enseignants = getEns($conn, rand(3, 4), $mainTeacher, $feedback); // Sélectionne aléatoirement entre 4 et 5 enseignants
-
-                // Vérifier la disponibilité de chaque enseignant et le remplacer s'il n'est pas disponible
-                $enseignantsDisponibles = array();
-                $enseignantsDisponibles[] = $mainTeacher;
-    
-                foreach ($enseignants as $enseignant) {
-                    if (isEnseignantAvailable($conn, $date, $heureDebut, $heureFin, $enseignant)) {
-                        $enseignantsDisponibles[] = $enseignant;
-                    } else {
-                        // Sélectionner un autre enseignant disponible
-                        $nouvelEnseignant = findAvailableTeacher($conn, $date, $heureDebut, $heureFin);
-                        if ($nouvelEnseignant) {
-                            $enseignantsDisponibles[] = $nouvelEnseignant;
-                        }
-                    }
-                }
-                $enseignants = $enseignantsDisponibles;
                 
                 // Récupérer les groupes pour cette spécialité
                 $groupes = getGroupesForSpecialite($conn, $specialite);
@@ -426,7 +409,6 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                                 }
                                 $end = microtime(true);
                                 if (($end - $startmicrotime) > 4){
-                                    echo 'second one';
                                     return false;
                                 }
                             } while (!isLieuAvailable($conn, $date, $heureDebut, $heureFin, $currentLieu['numero']) || in_array($currentLieu['numero'], $lieux_non_dispos_locaux));
@@ -449,68 +431,52 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                     }
                 }
                 unset($groupe); // Libérer la référence
-                // Fetch the necessary data (you would already have this part)
-// // Fetch the necessary data (you would already have this part)
-// $lieu_surveillants = array();
-// $enseignantstotal = getEns($conn, 4 * count($lieux_non_dispos_locaux), $mainTeacher, $feedback);
 
-//     $enseignantstotal[] = $mainTeacher;
+                // Sélection aléatoire des enseignants disponibles
+                $ens_par_lieu = rand(3, 4);
+                $enseignants = getEns($conn, $ens_par_lieu*count($lieux_non_dispos_locaux), $mainTeacher, $feedback, $date, $heureDebut, $heureFin); // Sélectionne aléatoirement entre 4 et 5 enseignants
 
-// // Shuffle the list of teachers to ensure random distribution
-// shuffle($enseignantstotal);
+                // Vérifier la disponibilité de chaque enseignant et le remplacer s'il n'est pas disponible
+                $enseignantsDisponibles = array();
+                // $enseignantsDisponibles[] = $mainTeacher;
+    
+                foreach ($enseignants as $enseignant) {
+                    if (isEnseignantAvailable($conn, $date, $heureDebut, $heureFin, $enseignant)) {
+                        $enseignantsDisponibles[] = $enseignant;
+                    } else {
+                        // Sélectionner un autre enseignant disponible
+                        $nouvelEnseignant = findAvailableTeacher($conn, $date, $heureDebut, $heureFin);
+                        if ($nouvelEnseignant) {
+                            $enseignantsDisponibles[] = $nouvelEnseignant;
+                        }
+                    }
+                }
+                $enseignants = $enseignantsDisponibles;
+                // Distribuer les lieux_non_dispos_locaux aux enseignants équitablement si possible, un enseignant doit avoir un attribut de lieu
+                $ens_par_lieu = floor(count($enseignants) / count($lieux_non_dispos_locaux));
+                $enseignants_chunks = array_chunk($enseignants, $ens_par_lieu);
 
-// // Remove the main teacher from the list
-// if (($key = array_search($mainTeacher, $enseignantstotal)) !== false) {
-//     unset($enseignantstotal[$key]);
-// }
+                // $enseignants_chunks[0][] = $mainTeacher;
+                $enseignants_chunks[0][] = $mainTeacher;
+                
+                foreach ($enseignants_chunks as $index => &$chunk) {
+                    foreach ($chunk as &$enseignant) {
+                        $enseignant = [
+                            'nom' => $enseignant,
+                            'lieu' => $lieux_non_dispos_locaux[$index]
+                        ];
+                    }
+                }
+                $surveillants = [];
+                foreach ($enseignants_chunks as $array) {
+                    for ($i = 0; $i < count($array); $i++) {
+                        $surveillants[] = $array[$i];
+                    }
+                    
+                }
 
-// // Calculate the number of surveillants required per "lieu"
-// $minSurveillantsPerLieu = 4;
-// $totalLieux = count($lieux_non_dispos_locaux);
-// $totalSurveillants = count($enseignantstotal);
+                
 
-// // Assign main teacher to the first "lieu"
-// $firstLieu = array_shift($lieux_non_dispos_locaux);
-// $lieu_surveillants[$firstLieu] = array($mainTeacher);
-
-// // Distribute surveillants to each "lieu"
-// $index = 0;
-// foreach ($lieux_non_dispos_locaux as $lieu) {
-//     $lieu_surveillants[$lieu] = array();
-
-//     // Ensure each lieu gets the minimum required surveillants
-//     for ($i = 0; $i < $minSurveillantsPerLieu; $i++) {
-//         if (isset($enseignantstotal[$index])) {
-//             $lieu_surveillants[$lieu][] = $enseignantstotal[$index];
-//             $index++;
-//         }
-//     }
-// }
-
-// // Distribute remaining surveillants evenly if there are any left
-// while ($index < $totalSurveillants) {
-//     foreach ($lieux_non_dispos_locaux as $lieu) {
-//         if ($index < $totalSurveillants) {
-//             $lieu_surveillants[$lieu][] = $enseignantstotal[$index];
-//             $index++;
-//         }
-//     }
-// }
-
-// // Add remaining surveillants to the first lieu if there are any left
-// while ($index < $totalSurveillants) {
-//     $lieu_surveillants[$firstLieu][] = $enseignantstotal[$index];
-//     $index++;
-// }
-
-// // Example usage of $lieu_surveillants
-// foreach ($lieu_surveillants as $lieu => $surveillants) {
-//     echo "Lieu: " . $lieu . "<br>Surveillants: ";
-//     foreach ($surveillants as $surveillant) {
-//         echo $surveillant . " ";
-//     }
-//     echo "<br>";
-// }
 
 
 
@@ -529,7 +495,8 @@ function generateRandomPlanning($conn, $specialite, $dateDebut, $dateFin, $feedb
                     // "type_lieu" => $lieu['type_lieu'],
                     "charge_module" => $mainTeacher,
                     "groupes" => $newGroupes,
-                    "sections" => $sectionsWithLieux
+                    "sections" => $sectionsWithLieux,
+                    'surveillants' => $surveillants
                 );
             }
         }
@@ -681,14 +648,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     if (!$stmt) {
                         throw new Exception("Erreur de préparation de la requête : " . $conn->error);
                     }
-                    echo $examen['id_module'];
+                    // echo $examen['id_module'];
                     $stmt->bind_param("sssiss", $examen['date'], $heureDebut, $heureFin, $examen['id_module'], $dateDebut, $dateFin); //, $lieu_numero
                     $stmt->execute();
                     if ($stmt->errno) {
                         throw new Exception("Erreur d'insertion dans la base de données: " . $stmt->error);
                     }
                     $examen_id = $stmt->insert_id;
-                    echo $examen_id;
+                    // echo $examen_id;
 
                     
 
@@ -733,6 +700,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                     }
                                 }
                             }
+                            foreach($examen['surveillants'] as $surveillant){
+                                if ($surveillant['lieu'] === $lieu_numero) {
+                                    $sql_surveillant = "INSERT INTO surveillant (id_examen, nom_enseignant, id_lieu_dispo) VALUES (?, ?, ?)";
+                                    $stmt_surveillant = $conn->prepare($sql_surveillant);
+                                    $stmt_surveillant->bind_param("sss", $examen_id, $surveillant['nom'], $last_insert_id);
+                                    $stmt_surveillant->execute();
+                                    if ($stmt_surveillant->errno) {
+                                        throw new Exception("Erreur d'insertion dans la table surveillant: " . $stmt_surveillant->error);
+                                    }
+                                }
+                            }
+        
                         } else {
                             echo "Error: Unable to retrieve the last inserted id.";
                         }
@@ -748,14 +727,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                             throw new Exception("Erreur d'insertion dans la table Enseignant_Examen: " . $stmt->error);
                         }
 
-                        // Insert into surveillant table
-                        $sql_surveillant = "INSERT INTO surveillant (id_examen, nom_enseignant) VALUES (?, ?)";
-                        $stmt_surveillant = $conn->prepare($sql_surveillant);
-                        $stmt_surveillant->bind_param("ss", $examen_id, $enseignant);
-                        $stmt_surveillant->execute();
-                        if ($stmt_surveillant->errno) {
-                            throw new Exception("Erreur d'insertion dans la table surveillant: " . $stmt_surveillant->error);
-                        }
                     }
 
                     // Commit the transaction
@@ -812,7 +783,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // echo json_encode($planningInitial);
         if ($planningInitial == false){
             $tentative++;
-            echo "tentative : " .$tentative;
+            // echo "tentative : " .$tentative. "\n";
         }
         // Filter the initial planning
 
@@ -825,7 +796,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $planningFiltre = filterPlanning($planningInitial, $conn);
     }else{
         echo json_encode($planningInitial);
-        echo "<script>alert('Géneration de planning echouée')</script>";
+        $error_message = "Génération de planning échouée, $tentative tentatives";
+        echo "<script>alert('$error_message')</script>";
     }
 
     }
@@ -850,6 +822,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/daterangepicker/daterangepicker.css" />
     <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/daterangepicker/daterangepicker.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" integrity="sha512-+dMXx3zS3DzSsJ0DWqs2Pl6UmMwLU9Uks37VPc6vFN9pQ9zC/25d8PzmWh/+wemel2wPCic8k2K10bUzcaIdhA==" crossorigin="anonymous" />
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/datepicker.min.js"></script>
+
 
     <style>
         body {
@@ -916,9 +892,61 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             cursor: pointer;
             transition: background-color 0.3s ease;
         }
+        .download-btn .pdf{
+            background-color: #dc3545!important;
+            color: #fff!important;
+            border: 0.2 solid #dc3545!important;
+        }
+        #downloadBtn{
+            background-color: #dc3545!important;
+            color: #fff!important;
+            border: 0.2 solid #dc3545!important;
+
+        }
 
         .download-btn:hover {
             background-color: #388e3c;
+        }
+    </style>
+    <style>
+        /* Define custom styles for PDF */
+        #tableauPlanning {
+            font-family: Arial, sans-serif;
+            border-collapse: collapse;
+            width: 100%;
+        }
+        
+        #tableauPlanning td, #tableauPlanning th {
+            border: 1px solid #dddddd;
+            padding: 8px;
+        }
+        
+        #tableauPlanning th {
+            background-color: #1D6A96;
+            color: white;
+            height: 50px;
+            border: 1px solid #dddddd;
+            /* text-align: center; */
+        }
+        #tableauPlanning th, #tableauPlanning td {
+            width: 25%; 
+        }
+        #tableauPlanning tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        #tableauPlanning tr:hover {
+            background-color: #f1f1f1;
+        }
+        #tableauPlanning td:first-child {
+            width: auto;
+            border:0;
+        }
+        tbody{
+            border: 1px solid #dddddd;
+
+        }
+        #tableauPlanning tr{
+            /* text-align: center; */
         }
     </style>
 
@@ -1047,10 +1075,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <br>
                 <!-- Dashboard content -->
                 <h1>Génération du planning d'examens</h1>
-                <?php if (isset($planningFiltre)) : ?>
-                    <button class="download-btn" onclick="downloadExcel()">Télécharger Planning Excel</button>
-                    <button class="download-btn" id="downloadBtn">Télécharger PDF</button>
-                <?php endif; ?>
 
                 <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
                     <div style="margin: auto; display:flex; width: 80%; justify-content: space-around">
@@ -1085,42 +1109,75 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 
                 </form>
-                <div class="table-data">
+                <div class="table-data" style="width:80%; margin: auto; margin-top:20px">
                     <div class="order">
                         <div class="head">
                             <h3>Generation de planning</h3>
 
                             <i class='bx bx-filter'></i>
                         </div>
+                        <?php if (isset($planningFiltre)) : ?>
+                            <div style="float: right;">
+                                <button class="download-btn excel" onclick="downloadExcel()">Excel</button>
+                                <button class="download-btn pdf" id="downloadBtn">PDF</button>
+                            </div>
+
+                        <?php endif; ?>
+
 
 
                         <?php
 
                         ?>
                         <!-- Affichage du planning d'examens généré -->
+                        <div id="generate-pdf">
                         <?php if (isset($planningFiltre) && !empty($planningFiltre)) : ?>
                             <h2>Planning pour la spécialité <?php echo $specialite; ?> dans la période du
                                 <?php echo $dateDebut; ?> au <?php echo $dateFin; ?>
                             </h2>
                             <br>
                             <table id="tableauPlanning">
-                                <tr>
+                                <thead>
+                                    <tr>
+                                        <th>Date et Heure</th>
+                                        <th>Module</th>
+                                        <th>Lieu</th>
+                                        <th>Surveillants</th>
+                                    </tr>
+                                </thead>
+                                <!-- <tr>
                                     <th>Date et Heure</th>
                                     <th>Module</th>
                                     <th>Lieu</th>
                                     <th>Surveillants</th>
-                                </tr>
+                                </tr> -->
+                                <tbody>
+
                                 <?php foreach ($planningFiltre as $exam) : ?>
                                     <tr>
-                                        <td><?php echo $exam['date']; ?> <br> <?php echo " de " . $exam['heureDebut']; ?> <br>
-                                            <?php echo " à " . $exam['heureFin']; ?> </td>
+                                        <td>
+                                            <?php
+                                                $timestamp = strtotime($exam['date']);
+
+                                                $dayOfWeek = $daysOfWeek[date('l', $timestamp)];
+                                                echo $dayOfWeek . " le " . date("d/m/Y", $timestamp);
+                                            ?>
+                                             <br> <?php echo "" . date("H:i", strtotime($exam['heureDebut'])); ?>
+                                            <?php echo "  -  " . date("H:i", strtotime($exam['heureFin'])) ?>
+                                        </td>
                                         <td><?php echo $exam['nom_module']; ?></td>
                                         <td>
                                             <?php
                                             // // Récupérer les sections et groupes
+                                            $firstLieu = true;
                                             foreach($exam['lieux'] as $lieu){
+                                                // if (!$firstLieu) echo "<hr>";
+                                                // echo "<strong> " . $lieu . " :<br> </strong>";
+                                                $firstLieu = false;
+
                                                 echo "<strong> " . $lieu . " : </strong>";
                                                 foreach ($exam['sections'] as $section) {
+                                                    
                                                     foreach ($exam['groupes'] as $groupe) {
                                                         if (($groupe['section'] == $section['section']) && ($lieu == $groupe['numero_lieu'] ) ) {
                                                             echo $section['section'] . $groupe['nom_groupe'] . " ";
@@ -1133,19 +1190,38 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                         </td>
                                         <!-- Afficher le type de lieu et le numéro -->
                                         <td>
-                                            <?php foreach ($exam['enseignants'] as $enseignant) : ?>
-                                                <?php if ($enseignant == $exam['charge_module']) : ?>
-                                                    <strong><?php echo $enseignant; ?></strong><br>
-                                                <?php else : ?>
-                                                    <?php echo $enseignant; ?><br>
-                                                <?php endif; ?>
-                                            <?php endforeach; ?>
+                                        <?php
+                                            // // Récupérer les sections et groupes
+                                            $firstLieu = true;
+                                            foreach($exam['lieux'] as $lieu){
+                                                if (!$firstLieu) echo "<br><hr style='color: #dddddd '><br>";
+                                                // echo "<strong> " . $lieu . " :<br> </strong>";
+                                                $firstLieu = false;
+                                                $firstSurveillant = true;
+                                                foreach ($exam['surveillants'] as $surveillant) {
+
+                                                        if ($lieu == $surveillant['lieu'] ) {
+                                                            if (!$firstSurveillant) echo ", ";
+                                                            $firstSurveillant = false;
+                                                            if($surveillant['nom'] == $exam['charge_module']){
+                                                                echo "<strong>" . $surveillant['nom'] . "</strong>";
+                                                            }else{
+                                                                echo $surveillant['nom'];
+                                                            }
+                                                        }
+                                                }
+                                                echo "<br>";
+                                            }
+                                            ?>
+
                                         </td>
 
                                     </tr>
                                 <?php endforeach; ?>
+                                </tbody>
                             </table>
                         <?php endif; ?>
+                        </div>
                     </div>
                 </div>
 
@@ -1210,24 +1286,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     </script>
 
+    <!-- Librairie html2pdf -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+
     <script>
-        // JavaScript pour télécharger le PDF
         document.getElementById("downloadBtn").addEventListener("click", function() {
-            var table = document.getElementById("tableauPlanning");
-            var html = table.outerHTML;
+            // Select the table element
+            var table = document.getElementById("generate-pdf");
 
-            // Convertit le HTML en PDF
-            var pdf = new jsPDF();
-            pdf.fromHTML(html, 15, 15);
-
-            // Télécharge le PDF
-            pdf.save("table.pdf");
+            // Convert the table to a PDF
+            html2pdf().from(table).save();
         });
     </script>
-
-    <!-- Bibliothèque jsPDF -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/datepicker.min.js"></script>
 
 </body>
 
